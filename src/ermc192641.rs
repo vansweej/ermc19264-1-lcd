@@ -126,10 +126,7 @@ where
         self.data_bus.set(Some(db_out));
     }
 
-    fn read(&mut self, x: u8) -> u8 {
-        //let chip = ChipSelect::try_from(x / 64).unwrap();
-        //self.control_bus.select_chip(chip);
-
+    fn read(&mut self) -> u8 {
         let db_in = self.data_bus.take().unwrap().data_dir_in();
         self.control_bus.set_rwrs(1, 1);
         delay_us(1);
@@ -167,7 +164,7 @@ where
     fn draw_point(&mut self, x: u8, y: u8, color: u8) {
         self.control_bus.unselect_all_chips();
         self.goto_xy(x, y / 8);
-        let col = self.read(x);
+        let col = self.read();
         let col_new = match color {
             PIXEL_OFF => Some(!(0x01 << (y % 8)) & col),
             PIXEL_ON => Some((0x01 << (y % 8)) | col),
