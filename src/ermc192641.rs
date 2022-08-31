@@ -7,6 +7,11 @@ use arduino_hal::delay_us;
 use avr_hal_generic::port::PinOps;
 use core::cell::Cell;
 use core::ops::{Index, IndexMut};
+use embedded_graphics::{
+    pixelcolor::BinaryColor,
+    prelude::{DrawTarget, OriginDimensions},
+};
+use embedded_graphics::{prelude::Size, Pixel};
 
 #[derive(Copy, Clone)]
 struct ChipSelectPage {
@@ -161,7 +166,7 @@ where
         }
     }
 
-    fn draw_point(&mut self, x: u8, y: u8, color: u8) {
+    pub fn draw_point(&mut self, x: u8, y: u8, color: u8) {
         self.control_bus.unselect_all_chips();
         self.goto_xy(x, y / 8);
         let col = self.read();
@@ -185,11 +190,54 @@ where
         self.lcd_on();
         self.set_start_line(0);
         self.clear_screen();
+    }
+}
 
-        for u in (0..64).step_by(6) {
-            for v in (0..192).step_by(2) {
-                self.draw_point(v, u, PIXEL_ON);
+impl<D0, D1, D2, D3, D4, D5, D6, D7, RW, RS, EN, CS1, CS2, CS3> DrawTarget
+    for Ermc192641<D0, D1, D2, D3, D4, D5, D6, D7, RW, RS, EN, CS1, CS2, CS3>
+where
+    D0: PinOps,
+    D1: PinOps,
+    D2: PinOps,
+    D3: PinOps,
+    D4: PinOps,
+    D5: PinOps,
+    D6: PinOps,
+    D7: PinOps,
+    RW: PinOps,
+    RS: PinOps,
+    EN: PinOps,
+    CS1: PinOps,
+    CS2: PinOps,
+    CS3: PinOps,
+{
+    type Color = BinaryColor;
+
+    type Error = core::convert::Infallible;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = embedded_graphics::Pixel<Self::Color>>,
+    {
+        for Pixel(coord, color) in pixels.into_iter() {
+            if let Ok((x @ 0..=191, y @ 0..=63)) = coord.try_into() {
+                let c = match color {
+                    BinaryColor::Off => PIXEL_OFF,
+                    BinaryColor::On => PIXEL_ON,
+                };
+
+                self.draw_point(x as u8, y as u8, c);
             }
         }
+
+        Ok(())
+    }
+}
+
+impl<D0, D1, D2, D3, D4, D5, D6, D7, RW, RS, EN, CS1, CS2, CS3> OriginDimensions
+    for Ermc192641<D0, D1, D2, D3, D4, D5, D6, D7, RW, RS, EN, CS1, CS2, CS3>
+{
+    fn size(&self) -> embedded_graphics::prelude::Size {
+        Size::new(192, 64)
     }
 }

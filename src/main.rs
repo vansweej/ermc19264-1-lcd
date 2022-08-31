@@ -7,7 +7,16 @@ mod dbarduino;
 mod ermc192641;
 
 use arduino::Arduino;
+use constants::{LCD_ON, PIXEL_ON};
 use dbarduino::DBArduino;
+use embedded_graphics::{
+    mono_font::{ascii::FONT_6X10, MonoTextStyle},
+    pixelcolor::BinaryColor,
+    prelude::*,
+    primitives::{Circle, Line, Primitive, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle},
+    text::Text,
+    Drawable, Pixel,
+};
 use ermc192641::Ermc192641;
 use panic_halt as _;
 
@@ -29,7 +38,7 @@ fn main() -> ! {
 
     //    ufmt::uwriteln!(&mut serial, "Hello from Arduino!\r").void_unwrap();
 
-    let mut db = DBArduino::new(
+    let db = DBArduino::new(
         pins.d8.into_output(),
         pins.d9.into_output(),
         pins.d10.into_output(),
@@ -51,6 +60,30 @@ fn main() -> ! {
 
     let mut display = Ermc192641::new(db, ar);
     display.init_lcd();
+
+    //Line::new(Point::new(50, 20), Point::new(60, 35))
+    //    .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+    //    .draw(&mut display)
+    //    .unwrap();
+
+    Rectangle::new(Point::new(0, 0), Size::new(192, 64))
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .stroke_color(BinaryColor::On)
+                .stroke_width(1)
+                .fill_color(BinaryColor::Off)
+                .build(),
+        )
+        .draw(&mut display)
+        .unwrap();
+
+    // Create a new character style
+    let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+
+    // Create a text at position (20, 30) and draw it using the previously defined style
+    Text::new("Hello Rust!", Point::new(20, 30), style)
+        .draw(&mut display)
+        .unwrap();
 
     let mut led = pins.d13.into_output();
 
