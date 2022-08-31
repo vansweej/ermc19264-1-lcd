@@ -92,31 +92,27 @@ where
         self.en.set_low();
     }
 
-    pub fn delay_nano_seconds(&mut self, ns: u16) {
-        delay_ms((1.0 + (ns as f32 / 1000.0)) as u16);
-    }
-
-    pub fn unselect_chip(&mut self) {
+    pub fn unselect_all_chips(&mut self) {
         self.cs1.set_high();
         self.cs2.set_high();
         self.cs3.set_high();
+    }
+
+    pub fn select_all_chips(&mut self) {
+        self.cs1.set_low();
+        self.cs2.set_low();
+        self.cs3.set_low();
     }
 
     pub fn select_chip(&mut self, chip: ChipSelect) {
         match chip {
             ChipSelect::CHIP1 => {
                 self.cs1.set_low();
-                self.cs2.set_high();
-                self.cs3.set_high();
             }
             ChipSelect::CHIP2 => {
-                self.cs1.set_high();
                 self.cs2.set_low();
-                self.cs3.set_high();
             }
             ChipSelect::CHIP3 => {
-                self.cs1.set_high();
-                self.cs2.set_high();
                 self.cs3.set_low();
             }
         }

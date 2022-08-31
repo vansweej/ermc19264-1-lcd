@@ -3,6 +3,7 @@ use crate::{
     constants::*,
     dbarduino::DBArduino,
 };
+use arduino_hal::delay_us;
 use avr_hal_generic::port::PinOps;
 use core::cell::Cell;
 use core::ops::{Index, IndexMut};
@@ -40,9 +41,6 @@ impl IndexMut<ChipSelect> for ChipSelectPage {
 pub struct Ermc192641<D0, D1, D2, D3, D4, D5, D6, D7, RW, RS, EN, CS1, CS2, CS3> {
     data_bus: Cell<Option<DBArduino<D0, D1, D2, D3, D4, D5, D6, D7>>>,
     control_bus: Arduino<RW, RS, EN, CS1, CS2, CS3>,
-    x: Cell<u8>,
-    y: Cell<u8>,
-    chip_page: Cell<ChipSelectPage>,
 }
 
 impl<D0, D1, D2, D3, D4, D5, D6, D7, RW, RS, EN, CS1, CS2, CS3>
@@ -70,259 +68,131 @@ where
         Ermc192641 {
             data_bus: Cell::new(Some(dbus)),
             control_bus: cbus,
-            x: Cell::new(0),
-            y: Cell::new(0),
-            chip_page: Cell::new(ChipSelectPage {
-                page1: 0,
-                page2: 0,
-                page3: 0,
-            }),
         }
     }
 
-    fn wait_ready(&mut self, chip: ChipSelect) {
-        self.control_bus.select_chip(chip);
-        let db_in = self.data_bus.take().unwrap().data_dir_in();
-        self.control_bus.set_rwrs(1, 0);
+    fn enable_pulse(&mut self) {
         self.control_bus.en_strobe_high();
-        self.control_bus.delay_nano_seconds(TDDR);
-        while db_in.ready_busy_status() {}
+        delay_us(5);
         self.control_bus.en_strobe_low();
-        let x = Some(db_in.data_dir_out());
-        self.data_bus.set(x);
+        delay_us(5);
     }
 
-    fn write_command(&mut self, cmd: u8, chip: ChipSelect) {
-        self.wait_ready(chip);
+    fn write_command(&mut self, data: u8) {
         self.control_bus.set_rwrs(0, 0);
         let mut db_out = self.data_bus.take().unwrap().data_dir_out();
-        db_out.write_byte(cmd);
-        self.control_bus.delay_nano_seconds(TAS);
-        self.control_bus.en_strobe_high();
-        self.control_bus.delay_nano_seconds(TWH);
-        self.control_bus.en_strobe_low();
-        let x = Some(db_out.data_dir_out());
-        self.data_bus.set(x);
+        db_out.write_byte(data);
+        self.enable_pulse();
+        self.data_bus.set(Some(db_out));
     }
 
-    fn xyval_to_chip(&self, x: u8, y: u8) -> u8 {
-        x / CHIP_WIDTH
+    fn lcd_on(&mut self) {
+        self.control_bus.select_all_chips();
+        self.write_command(LCD_ON);
     }
-    // #define glcdDev_XYval2Chip(x,y) ((x/CHIP_WIDTH) + ((y/CHIP_HEIGHT) * (DISPLAY_WIDTH/CHIP_WIDTH)))
 
-    fn xval_to_chip_col(&self, x: u8) -> u8 {
-        x % CHIP_WIDTH
+    fn lcd_off(&mut self) {
+        self.control_bus.select_all_chips();
+        self.write_command(LCD_OFF);
     }
-    // #define glcdDev_Xval2ChipCol(x)		((x) % CHIP_WIDTH)
+
+    fn set_start_line(&mut self, line: u8) {
+        self.control_bus.select_all_chips();
+        self.write_command(LCD_START_LINE | line);
+    }
+
+    fn goto_col(&mut self, x: u8) {
+        let chip = ChipSelect::try_from(x / 64).unwrap();
+        let col = x - (64 * (x / 64));
+        self.control_bus.select_chip(chip);
+        self.write_command((LCD_SET_COLUMN | col) & 0x7F);
+    }
+
+    fn goto_row(&mut self, y: u8) {
+        self.write_command((LCD_SET_ROW | y) & 0xBF);
+    }
 
     fn goto_xy(&mut self, x: u8, y: u8) {
-        if (self.x.get() == x) && (self.y.get() == y) {
-            ()
-        }
-
-        if (self.x.get() > DISPLAY_WIDTH - 1) || (self.y.get() > DISPLAY_HEIGHT - 1) {
-            ()
-        }
-
-        self.x.set(x);
-        self.y.set(y);
-
-        let chip = ChipSelect::try_from(self.xyval_to_chip(x, y)).unwrap();
-
-        if y / 8 != self.chip_page.get()[chip] {
-            self.chip_page.get()[chip] = y / 8;
-            let cmd = LCD_SET_PAGE | self.chip_page.get()[chip];
-            self.write_command(cmd, chip);
-        }
-
-        let xx = self.xval_to_chip_col(x);
-
-        let cmd = LCD_SET_ADD | xx;
-        self.write_command(cmd, chip);
+        self.goto_col(x);
+        self.goto_row(y);
     }
 
-    fn do_read_data(&mut self) -> u8 {
-        let chip = ChipSelect::try_from(self.xyval_to_chip(self.x.get(), self.y.get())).unwrap();
+    fn write(&mut self, data: u8) {
+        self.control_bus.set_rwrs(0, 1);
+        let mut db_out = self.data_bus.take().unwrap().data_dir_out();
+        db_out.write_byte(data);
+        delay_us(1);
+        self.enable_pulse();
+        self.data_bus.set(Some(db_out));
+    }
 
-        self.wait_ready(chip);
-        self.control_bus.set_rwrs(1, 1);
-        self.control_bus.delay_nano_seconds(TAS);
-        self.control_bus.en_strobe_high();
-        self.control_bus.delay_nano_seconds(TDDR);
+    fn read(&mut self, x: u8) -> u8 {
+        //let chip = ChipSelect::try_from(x / 64).unwrap();
+        //self.control_bus.select_chip(chip);
 
         let db_in = self.data_bus.take().unwrap().data_dir_in();
-        let data = db_in.read_byte();
-
+        self.control_bus.set_rwrs(1, 1);
+        delay_us(1);
+        self.control_bus.en_strobe_high();
+        delay_us(1);
         self.control_bus.en_strobe_low();
+        delay_us(1);
+        self.control_bus.en_strobe_high();
+        delay_us(5);
+        let data = db_in.read_byte();
+        self.control_bus.en_strobe_low();
+        delay_us(1);
+
         self.data_bus.set(Some(db_in.data_dir_out()));
-        data
-    }
-
-    fn read_data(&mut self) -> u8 {
-        let x = self.x.get();
-        if x >= DISPLAY_WIDTH {
-            return 0;
-        }
-
-        let _d = self.do_read_data();
-
-        let data = self.do_read_data();
-
-        self.x.set(0); // check this out
-        self.goto_xy(x, self.y.get());
 
         data
     }
 
-    fn write_data(&mut self, data: u8) {
-        let x = self.x.get();
-        if x >= DISPLAY_WIDTH {
-            return ();
+    fn clear_line(&mut self, line: u8) {
+        self.goto_xy(0, line);
+        self.goto_xy(64, line);
+        self.goto_xy(128, line);
+        for _i in 0..64 {
+            self.write(PIXEL_OFF);
         }
+        self.control_bus.unselect_all_chips();
+    }
 
-        let chip = ChipSelect::try_from(self.xyval_to_chip(self.x.get(), self.y.get())).unwrap();
-        let yoffset = self.y.get() % 8;
-
-        if yoffset != 0 {
-            let mut display_data = self.read_data();
-            self.wait_ready(chip);
-            self.control_bus.set_rwrs(0, 1);
-            let mut db_out = self.data_bus.take().unwrap().data_dir_out();
-            self.control_bus.delay_nano_seconds(TAS);
-            self.control_bus.en_strobe_high();
-
-            display_data |= data << yoffset;
-
-            db_out.write_byte(display_data);
-            self.control_bus.delay_nano_seconds(TWH);
-            self.control_bus.en_strobe_low();
-
-            self.data_bus.set(Some(db_out.data_dir_out()));
-
-            let ysave = self.y.get();
-            if ((ysave + 8) & !7) >= DISPLAY_HEIGHT {
-                self.goto_xy(self.x.get() + 1, ysave);
-                ()
-            }
-
-            self.goto_xy(self.x.get(), ((ysave + 8) & !7));
-
-            let mut display_data = self.read_data();
-            self.wait_ready(chip);
-
-            self.control_bus.set_rwrs(0, 1);
-            let mut db_out = self.data_bus.take().unwrap().data_dir_out();
-            self.control_bus.delay_nano_seconds(TAS);
-            self.control_bus.en_strobe_high();
-
-            display_data |= data >> (8 - yoffset);
-
-            db_out.write_byte(display_data);
-
-            self.control_bus.delay_nano_seconds(TWH);
-            self.control_bus.en_strobe_low();
-            self.goto_xy(self.x.get() + 1, ysave);
-
-            self.data_bus.set(Some(db_out.data_dir_out()));
-        } else {
-            self.wait_ready(chip);
-
-            self.control_bus.set_rwrs(0, 1);
-            let mut db_out = self.data_bus.take().unwrap().data_dir_out();
-            self.control_bus.delay_nano_seconds(TAS);
-            self.control_bus.en_strobe_high();
-
-            db_out.write_byte(data);
-
-            self.control_bus.delay_nano_seconds(TWH);
-            self.control_bus.en_strobe_low();
-            self.data_bus.set(Some(db_out.data_dir_out()));
-
-            self.x.set(self.x.get() + 1);
-
-            if ChipSelect::try_from(self.xyval_to_chip(self.x.get(), self.y.get())).unwrap() != chip
-            {
-                if self.x.get() < DISPLAY_WIDTH {
-                    let x = self.x.get();
-                    self.x.set(0);
-                    self.goto_xy(x, self.y.get());
-                }
-            }
+    fn clear_screen(&mut self) {
+        for i in 0..8 {
+            self.clear_line(i);
         }
     }
 
-    pub fn set_pixels(&mut self, x: u8, mut y: u8, x2: u8, y2: u8, color: u8) {
-        let height = y2 - y + 1;
-        let width = x2 - x + 1;
-
-        let page_offset = y % 8;
-        y = y - page_offset;
-        let mut mask = 0xFF;
-
-        let mut h = if height < 8 - page_offset {
-            mask >>= 8 - height;
-            height
-        } else {
-            8 - page_offset
+    fn draw_point(&mut self, x: u8, y: u8, color: u8) {
+        self.control_bus.unselect_all_chips();
+        self.goto_xy(x, y / 8);
+        let col = self.read(x);
+        let col_new = match color {
+            PIXEL_OFF => Some(!(0x01 << (y % 8)) & col),
+            PIXEL_ON => Some((0x01 << (y % 8)) | col),
+            _ => None,
         };
-        mask <<= page_offset;
-
-        self.goto_xy(x, y);
-
-        for i in 0..width {
-            let mut data = self.read_data();
-
-            if color == PIXEL_ON {
-                data |= mask;
-            } else {
-                data &= !mask;
-            }
-
-            self.write_data(data);
-        }
-
-        //        while (h + 8) <= height {
-        //            h += 8;
-        //            y += 8;
-        //            self.goto_xy(x, y);
-
-        //            for i in 0..width {
-        //                self.write_data(color);
-        //            }
-        //        }
-
-        //        if h < height {
-        //            mask = !(0xFF << (height - h));
-        //            self.goto_xy(x, y + 8);
-
-        //            for i in 0..width {
-        //                let mut data = self.read_data();
-
-        //                if color == PIXEL_ON {
-        //                    data |= mask;
-        //                } else {
-        //                    data &= !mask;
-        //                }
-
-        //                self.write_data(data);
-        //            }
-        //        }
+        self.goto_xy(x, y / 8);
+        self.write(col_new.unwrap());
     }
 
     pub fn init_lcd(&mut self) {
-        self.control_bus.unselect_chip();
+        self.control_bus.unselect_all_chips();
         self.control_bus.en_strobe_low();
 
         self.control_bus.set_rwrs(0, 0);
 
         arduino_hal::delay_ms(50);
 
-        ChipSelect::iter().for_each(|chip| {
-            self.write_command(LCD_ON, chip);
-            self.write_command(LCD_DISP_START, chip);
-        });
+        self.lcd_on();
+        self.set_start_line(0);
+        self.clear_screen();
 
-        self.set_pixels(0, 0, DISPLAY_WIDTH - 1, DISPLAY_HEIGHT - 1, PIXEL_OFF);
-        self.goto_xy(0, 0);
+        for u in (0..64).step_by(6) {
+            for v in (0..192).step_by(2) {
+                self.draw_point(v, u, PIXEL_ON);
+            }
+        }
     }
 }
